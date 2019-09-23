@@ -893,6 +893,7 @@ void apply_ordering(DescriptorOrdering& ordering, ConstTableRef target, const pa
 
 } // namespace query_builder
 
+/*
 namespace {
 
 class MixedArguments : public Arguments {
@@ -973,5 +974,6 @@ Query Table::query(const std::string& query_string, query_builder::Arguments& ar
 
     return q;
 }
+*/
 
 } // namespace realm
