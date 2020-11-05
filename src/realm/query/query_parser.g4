@@ -17,12 +17,15 @@ atom_pred
     | val=(TRUE_PRED | FALSE_PRED)                                     # trueOrFalse
     ;
 
-value
+value : prop | constant;
+
+prop
     : aggr=(ANY|ALL|NONE)? path  ID ('.' postOp)?                      # property
     | path ID '.' aggrOp '.' ID                                        # propAggr
     | path ID '.' aggrOp                                               # listAggr
-    | val=(NUMBER|STRING|TIMESTAMP|TRUE|FALSE|NULL_VAL|ARG)            # constant
     ;
+
+constant : val=(NUMBER|STRING|TIMESTAMP|TRUE|FALSE|NULL_VAL|ARG);
 
 path: (ID '.')*;
 
@@ -35,6 +38,7 @@ NUMBER
     :   SIGN? DIGIT+ '.' DIGIT* EXP?
     |   SIGN? DIGIT* '.' DIGIT+ EXP?
     |   SIGN? DIGIT+ EXP?
+    |   SIGN? ('inf' | 'infinity')
     ;
 
 TRUE_PRED : 'TRUEPREDICATE';

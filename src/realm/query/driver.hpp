@@ -20,7 +20,7 @@ public:
     Query parse(const std::string& str);
 
 private:
-    using Values = std::variant<ExpressionComparisonType, Subexpr*>;
+    using Values = std::variant<ExpressionComparisonType, Subexpr*, DataType>;
     TableRef m_base_table;
     antlr4::tree::ParseTreeProperty<Values> m_values;
     query_builder::Arguments& m_args;
@@ -36,6 +36,7 @@ private:
     antlrcpp::Any visitStringOps(query_parserParser::StringOpsContext*) override;
     antlrcpp::Any visitOr(query_parserParser::OrContext* context) override;
     antlrcpp::Any visitAnd(query_parserParser::AndContext* context) override;
+    antlrcpp::Any visitValue(query_parserParser::ValueContext* context) override;
     antlrcpp::Any visitProperty(query_parserParser::PropertyContext*) override;
     antlrcpp::Any visitPostOp(query_parserParser::PostOpContext*) override;
     antlrcpp::Any visitPropAggr(query_parserParser::PropAggrContext*) override;
@@ -44,6 +45,9 @@ private:
     antlrcpp::Any visitConstant(query_parserParser::ConstantContext*) override;
     antlrcpp::Any visitPath(query_parserParser::PathContext*) override;
     antlrcpp::Any visitTrueOrFalse(query_parserParser::TrueOrFalseContext*) override;
+
+    std::pair<std::unique_ptr<Subexpr>, std::unique_ptr<Subexpr>>
+    cmp(const std::vector<query_parserParser::ValueContext*>& values);
 };
 } // namespace realm
 #endif // ! DRIVER_HH

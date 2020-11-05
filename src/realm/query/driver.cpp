@@ -1,6 +1,7 @@
 #include "realm/query/driver.hpp"
 #include <realm/parser/query_builder.hpp>
 #include <realm/query_expression.hpp>
+#include <realm/decimal128.hpp>
 #include "query_parserParser.h"
 #include "query_parserLexer.h"
 #include <ANTLRInputStream.h>
@@ -29,7 +30,7 @@ public:
     }
     void recover(const antlr4::LexerNoViableAltException& e) override
     {
-        throw e;
+        throw std::runtime_error("LexerNoViableAltException");
     }
 };
 
@@ -63,7 +64,6 @@ ParserDriver::~ParserDriver() {}
 
 Query ParserDriver::parse(const std::string& str)
 {
-    std::string dummy;
     MyErrorListener error_listener;
     antlr4::ANTLRInputStream inp(str);
     BailLexer lexer(&inp);
@@ -131,10 +131,44 @@ Query ParserDriver::simple_query(int op, ColKey col_key, T val)
     return m_base_table->where();
 }
 
+std::pair<std::unique_ptr<Subexpr>, std::unique_ptr<Subexpr>>
+ParserDriver::cmp(const std::vector<query_parserParser::ValueContext*>& values)
+{
+    std::unique_ptr<Subexpr> left;
+    std::unique_ptr<Subexpr> right;
+
+    auto left_constant = values[0]->constant();
+    auto right_constant = values[1]->constant();
+    auto left_prop = values[0]->prop();
+    auto right_prop = values[1]->prop();
+
+    if (left_constant && right_constant) {
+        throw std::runtime_error("Cannot compare two constants");
+    }
+
+    if (right_constant) {
+        // Take left first - it cannot be a constant
+        left = std::move(visit(left_prop).as<std::unique_ptr<Subexpr>>());
+        m_values.put(right_constant, left->get_type());
+        right = std::move(visit(right_constant).as<std::unique_ptr<Subexpr>>());
+    }
+    else {
+        right = std::move(visit(right_prop).as<std::unique_ptr<Subexpr>>());
+        if (left_constant) {
+            m_values.put(left_constant, right->get_type());
+            left = std::move(visit(left_constant).as<std::unique_ptr<Subexpr>>());
+        }
+        else {
+            left = std::move(visit(left_prop).as<std::unique_ptr<Subexpr>>());
+        }
+    }
+    return {std::move(left), std::move(right)};
+}
+
 antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualContext* context)
 {
-    std::unique_ptr<Subexpr> left(std::move(visit(context->value(0)).as<std::unique_ptr<Subexpr>>()));
-    std::unique_ptr<Subexpr> right(std::move(visit(context->value(1)).as<std::unique_ptr<Subexpr>>()));
+    auto values = context->value();
+    auto [left, right] = cmp(values);
     auto op = context->op->getType();
     bool case_sensitive = true;
     if (context->CASEINSENSITIVE()) {
@@ -166,6 +200,7 @@ antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualCo
             case type_Double:
                 break;
             case type_Decimal:
+                return simple_query(op, col_key, right->get_mixed().get<Decimal128>());
                 break;
             case type_ObjectId:
                 break;
@@ -197,8 +232,8 @@ antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualCo
 
 antlrcpp::Any ParserDriver::visitCompare(query_parserParser::CompareContext* context)
 {
-    std::unique_ptr<Subexpr> left(std::move(visit(context->value(0)).as<std::unique_ptr<Subexpr>>()));
-    std::unique_ptr<Subexpr> right(std::move(visit(context->value(1)).as<std::unique_ptr<Subexpr>>()));
+    auto values = context->value();
+    auto [left, right] = cmp(values);
     auto op = context->op->getType();
 
     const TableProperty* prop = dynamic_cast<const TableProperty*>(left.get());
@@ -220,6 +255,7 @@ antlrcpp::Any ParserDriver::visitCompare(query_parserParser::CompareContext* con
             case type_Double:
                 break;
             case type_Decimal:
+                return simple_query(op, col_key, right->get_mixed().get<Decimal128>());
                 break;
             case type_ObjectId:
                 break;
@@ -332,6 +368,14 @@ antlrcpp::Any ParserDriver::visitAnd(query_parserParser::AndContext* context)
         q.and_query(std::move(visit(ctx).as<Query>()));
     }
     return q;
+}
+
+antlrcpp::Any ParserDriver::visitValue(query_parserParser::ValueContext* context)
+{
+    if (auto ctx = context->prop()) {
+        return visit(ctx);
+    }
+    return visit(context->constant());
 }
 
 antlrcpp::Any ParserDriver::visitProperty(query_parserParser::PropertyContext* context)
@@ -448,26 +492,31 @@ antlrcpp::Any ParserDriver::visitAggrOp(query_parserParser::AggrOpContext* conte
 
 antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* context)
 {
+    std::unique_ptr<Subexpr> ret;
+    auto hint = std::get<DataType>(m_values.get(context));
     switch (context->val->getType()) {
         case query_parserParser::NUMBER: {
             auto s = context->NUMBER()->getText();
-            if (s.find_first_of(".eE") < s.length()) {
-                double d = strtod(s.c_str(), nullptr);
-                std::unique_ptr<Subexpr> ret = std::make_unique<Value<double>>(d);
-                return antlrcpp::Any(std::move(ret));
+            if (hint == type_Decimal) {
+                Decimal128 d(s);
+                ret = std::make_unique<Value<Decimal128>>(d);
             }
             else {
-                int64_t n = strtol(s.c_str(), nullptr, 0);
-                std::unique_ptr<Subexpr> ret = std::make_unique<Value<int64_t>>(n);
-                return antlrcpp::Any(std::move(ret));
+                if (s.find_first_of(".eE") < s.length()) {
+                    double d = strtod(s.c_str(), nullptr);
+                    ret = std::make_unique<Value<double>>(d);
+                }
+                else {
+                    int64_t n = strtol(s.c_str(), nullptr, 0);
+                    ret = std::make_unique<Value<int64_t>>(n);
+                }
             }
             break;
         }
         case query_parserParser::STRING: {
             auto s = context->STRING()->getText();
             std::string str = s.substr(1, s.size() - 2);
-            std::unique_ptr<Subexpr> ret = std::make_unique<ConstantStringValue>(str);
-            return antlrcpp::Any(std::move(ret));
+            ret = std::make_unique<ConstantStringValue>(str);
             break;
         }
         case query_parserParser::TIMESTAMP: {
@@ -508,37 +557,46 @@ antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* c
                     nanoseconds *= -1;
                 }
             }
-            std::unique_ptr<Subexpr> ret =
-                std::make_unique<Value<Timestamp>>(get_timestamp_if_valid(seconds, nanoseconds));
-            return antlrcpp::Any(std::move(ret));
+            ret = std::make_unique<Value<Timestamp>>(get_timestamp_if_valid(seconds, nanoseconds));
             break;
         }
         case query_parserParser::NULL_VAL: {
-            std::unique_ptr<Subexpr> ret = std::make_unique<Value<null>>(realm::null());
-            return antlrcpp::Any(std::move(ret));
+            ret = std::make_unique<Value<null>>(realm::null());
             break;
         }
         case query_parserParser::TRUE: {
-            std::unique_ptr<Subexpr> ret = std::make_unique<Value<Bool>>(true);
-            return antlrcpp::Any(std::move(ret));
+            ret = std::make_unique<Value<Bool>>(true);
             break;
         }
         case query_parserParser::FALSE: {
-            std::unique_ptr<Subexpr> ret = std::make_unique<Value<Bool>>(false);
-            return antlrcpp::Any(std::move(ret));
+            ret = std::make_unique<Value<Bool>>(false);
             break;
         }
         case query_parserParser::ARG: {
             auto s = context->ARG()->getText();
             size_t arg_no = size_t(strtol(s.substr(1).c_str(), nullptr, 10));
             if (m_args.is_argument_null(arg_no)) {
-                std::unique_ptr<Subexpr> ret = std::make_unique<Value<null>>(realm::null());
-                return antlrcpp::Any(std::move(ret));
+                ret = std::make_unique<Value<null>>(realm::null());
+            }
+            else {
+                switch (hint) {
+                    case type_Int:
+                        ret = std::make_unique<Value<int64_t>>(m_args.long_for_argument(arg_no));
+                        break;
+                    case type_String:
+                        ret = std::make_unique<ConstantStringValue>(m_args.string_for_argument(arg_no));
+                        break;
+                    case type_Decimal:
+                        ret = std::make_unique<Value<Decimal128>>(m_args.decimal128_for_argument(arg_no));
+                        break;
+                    default:
+                        break;
+                }
             }
             break;
         }
     }
-    return {};
+    return antlrcpp::Any(std::move(ret));
 }
 
 antlrcpp::Any ParserDriver::visitTrueOrFalse(query_parserParser::TrueOrFalseContext* context)
@@ -603,6 +661,8 @@ Subexpr* LinkChain::column(std::string col)
                 return new Columns<Double>(col_key, m_base_table, m_link_cols);
             case col_type_Timestamp:
                 return new Columns<Timestamp>(col_key, m_base_table, m_link_cols);
+            case col_type_Decimal:
+                return new Columns<Decimal128>(col_key, m_base_table, m_link_cols);
             case col_type_Link:
                 return new Columns<ObjKey>(col_key, m_base_table, m_link_cols);
             default:
