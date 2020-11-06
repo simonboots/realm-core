@@ -2,9 +2,14 @@
 #include <realm/parser/query_builder.hpp>
 #include <realm/query_expression.hpp>
 #include <realm/decimal128.hpp>
+
+#include "query_parserBaseVisitor.h"
 #include "query_parserParser.h"
 #include "query_parserLexer.h"
 #include <ANTLRInputStream.h>
+
+#include <map>
+#include <variant>
 
 using namespace realm;
 using namespace std::string_literals;
@@ -48,6 +53,128 @@ public:
     void sync(antlr4::Parser*) override {}
 };
 
+class QueryParser : public query_parserVisitor {
+public:
+    QueryParser()
+        : m_args(s_default_args)
+    {
+    }
+
+    QueryParser(TableRef t, query_builder::Arguments& args)
+        : m_base_table(t)
+        , m_args(args)
+    {
+    }
+
+    Query build_query(const std::string& str)
+    {
+        antlr4::ANTLRInputStream inp(str);
+        BailLexer lexer(&inp);
+        lexer.removeErrorListeners();
+        lexer.addErrorListener(&m_error_listener);
+        antlr4::CommonTokenStream tokens(&lexer);
+        query_parserParser parser(&tokens);
+        parser.setErrorHandler(std::make_shared<BailErrorStrategy>());
+        parser.removeErrorListeners();
+        parser.addErrorListener(&m_error_listener);
+
+        try {
+            antlr4::tree::ParseTree* tree = parser.query();
+            return visit(tree).as<Query>();
+        }
+        catch (const std::exception& e) {
+            if (m_error_listener.called) {
+                std::string msg = "Invalid predicate: '" + str + "': " + m_error_listener.error_msg;
+                throw std::runtime_error(msg);
+            }
+            else {
+                throw e;
+            }
+        }
+        return {};
+    }
+
+    void parse_only(const std::string& str)
+    {
+        std::cout << str << std::endl;
+        MyErrorListener error_listener;
+        antlr4::ANTLRInputStream inp(str);
+        BailLexer lexer(&inp);
+        lexer.removeErrorListeners();
+        lexer.addErrorListener(&error_listener);
+        antlr4::CommonTokenStream tokens(&lexer);
+        query_parserParser parser(&tokens);
+        parser.setErrorHandler(std::make_shared<BailErrorStrategy>());
+        parser.removeErrorListeners();
+        parser.addErrorListener(&error_listener);
+        try {
+            parser.query();
+        }
+        catch (const std::exception& e) {
+            if (error_listener.called) {
+                std::string msg = "Invalid predicate: '" + str + "': " + error_listener.error_msg;
+                throw std::runtime_error(msg);
+            }
+            else {
+                throw e;
+            }
+        }
+    }
+
+private:
+    using QP = query_parserParser;
+    using Expr = std::unique_ptr<Subexpr>;
+    using Values = std::variant<ExpressionComparisonType, Subexpr*, DataType>;
+
+    TableRef m_base_table;
+    query_builder::Arguments& m_args;
+    antlr4::tree::ParseTreeProperty<Values> m_values;
+    MyErrorListener m_error_listener;
+
+    static query_builder::NoArguments s_default_args;
+
+    antlrcpp::Any visitQuery(QP::QueryContext* context) override;
+    antlrcpp::Any visitNot(QP::NotContext* context) override;
+    antlrcpp::Any visitParens(QP::ParensContext* context) override;
+    antlrcpp::Any visitCompareEqual(QP::CompareEqualContext*);
+    antlrcpp::Any visitCompare(QP::CompareContext* context) override;
+    antlrcpp::Any visitStringOps(QP::StringOpsContext*) override;
+    antlrcpp::Any visitOr(QP::OrContext* context) override;
+    antlrcpp::Any visitAnd(QP::AndContext* context) override;
+    antlrcpp::Any visitValue(QP::ValueContext* context) override;
+    antlrcpp::Any visitProperty(QP::PropertyContext*) override;
+    antlrcpp::Any visitPostOp(QP::PostOpContext*) override;
+    antlrcpp::Any visitPropAggr(QP::PropAggrContext*) override;
+    antlrcpp::Any visitListAggr(QP::ListAggrContext*) override;
+    antlrcpp::Any visitAggrOp(QP::AggrOpContext*) override;
+    antlrcpp::Any visitConstant(QP::ConstantContext*) override;
+    antlrcpp::Any visitPath(QP::PathContext*) override;
+    antlrcpp::Any visitTrueOrFalse(QP::TrueOrFalseContext*) override;
+
+    template <class T>
+    Query simple_query(int op, ColKey col_key, T val)
+    {
+        switch (op) {
+            case query_parserParser::EQUAL:
+                return m_base_table->where().equal(col_key, val);
+            case query_parserParser::NOT_EQUAL:
+                return m_base_table->where().not_equal(col_key, val);
+            case query_parserParser::GREATER:
+                return m_base_table->where().greater(col_key, val);
+            case query_parserParser::LESS:
+                return m_base_table->where().less(col_key, val);
+            case query_parserParser::GREATER_EQUAL:
+                return m_base_table->where().greater_equal(col_key, val);
+            case query_parserParser::LESS_EQUAL:
+                return m_base_table->where().less_equal(col_key, val);
+        }
+        return m_base_table->where();
+    }
+    std::pair<Expr, Expr> cmp(const std::vector<QP::ValueContext*>& values);
+};
+
+query_builder::NoArguments QueryParser::s_default_args;
+
 Timestamp get_timestamp_if_valid(int64_t seconds, int32_t nanoseconds)
 {
     const bool both_non_negative = seconds >= 0 && nanoseconds >= 0;
@@ -58,46 +185,13 @@ Timestamp get_timestamp_if_valid(int64_t seconds, int32_t nanoseconds)
     throw std::runtime_error("Invalid timestamp format");
 }
 
-} // namespace
-
-ParserDriver::~ParserDriver() {}
-
-Query ParserDriver::parse(const std::string& str)
-{
-    MyErrorListener error_listener;
-    antlr4::ANTLRInputStream inp(str);
-    BailLexer lexer(&inp);
-    lexer.removeErrorListeners();
-    lexer.addErrorListener(&error_listener);
-    antlr4::CommonTokenStream tokens(&lexer);
-    query_parserParser parser(&tokens);
-    parser.setErrorHandler(std::make_shared<BailErrorStrategy>());
-    parser.removeErrorListeners();
-    parser.addErrorListener(&error_listener);
-    try {
-        antlr4::tree::ParseTree* tree = parser.query();
-        auto tree_str = tree->toStringTree(&parser);
-        return visit(tree).as<Query>();
-    }
-    catch (const std::exception& e) {
-        if (error_listener.called) {
-            std::string msg = "Invalid predicate: '" + str + "': " + error_listener.error_msg;
-            throw std::runtime_error(msg);
-        }
-        else {
-            throw e;
-        }
-    }
-    return {};
-}
-
-antlrcpp::Any ParserDriver::visitQuery(query_parserParser::QueryContext* context)
+antlrcpp::Any QueryParser::visitQuery(query_parserParser::QueryContext* context)
 {
     return visit(context->pred());
 }
 
 
-antlrcpp::Any ParserDriver::visitNot(query_parserParser::NotContext* context)
+antlrcpp::Any QueryParser::visitNot(query_parserParser::NotContext* context)
 {
     Query query = visit(context->atom_pred()).as<Query>();
     Query q = m_base_table->where();
@@ -106,33 +200,13 @@ antlrcpp::Any ParserDriver::visitNot(query_parserParser::NotContext* context)
     return {q};
 }
 
-antlrcpp::Any ParserDriver::visitParens(query_parserParser::ParensContext* context)
+antlrcpp::Any QueryParser::visitParens(query_parserParser::ParensContext* context)
 {
     return visit(context->pred());
 }
 
-template <class T>
-Query ParserDriver::simple_query(int op, ColKey col_key, T val)
-{
-    switch (op) {
-        case query_parserParser::EQUAL:
-            return m_base_table->where().equal(col_key, val);
-        case query_parserParser::NOT_EQUAL:
-            return m_base_table->where().not_equal(col_key, val);
-        case query_parserParser::GREATER:
-            return m_base_table->where().greater(col_key, val);
-        case query_parserParser::LESS:
-            return m_base_table->where().less(col_key, val);
-        case query_parserParser::GREATER_EQUAL:
-            return m_base_table->where().greater_equal(col_key, val);
-        case query_parserParser::LESS_EQUAL:
-            return m_base_table->where().less_equal(col_key, val);
-    }
-    return m_base_table->where();
-}
-
 std::pair<std::unique_ptr<Subexpr>, std::unique_ptr<Subexpr>>
-ParserDriver::cmp(const std::vector<query_parserParser::ValueContext*>& values)
+QueryParser::cmp(const std::vector<query_parserParser::ValueContext*>& values)
 {
     std::unique_ptr<Subexpr> left;
     std::unique_ptr<Subexpr> right;
@@ -165,7 +239,7 @@ ParserDriver::cmp(const std::vector<query_parserParser::ValueContext*>& values)
     return {std::move(left), std::move(right)};
 }
 
-antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualContext* context)
+antlrcpp::Any QueryParser::visitCompareEqual(query_parserParser::CompareEqualContext* context)
 {
     auto values = context->value();
     auto [left, right] = cmp(values);
@@ -236,7 +310,7 @@ static std::map<int, std::string> opstr = {{query_parserParser::GREATER, ">"},
                                            {query_parserParser::GREATER_EQUAL, ">="},
                                            {query_parserParser::LESS_EQUAL, "<="}};
 
-antlrcpp::Any ParserDriver::visitCompare(query_parserParser::CompareContext* context)
+antlrcpp::Any QueryParser::visitCompare(query_parserParser::CompareContext* context)
 {
     auto values = context->value();
     auto [left, right] = cmp(values);
@@ -289,7 +363,7 @@ antlrcpp::Any ParserDriver::visitCompare(query_parserParser::CompareContext* con
     return {};
 }
 
-antlrcpp::Any ParserDriver::visitStringOps(query_parserParser::StringOpsContext* context)
+antlrcpp::Any QueryParser::visitStringOps(query_parserParser::StringOpsContext* context)
 {
     std::unique_ptr<Subexpr> left(std::move(visit(context->value()).as<std::unique_ptr<Subexpr>>()));
     StringData val;
@@ -350,7 +424,7 @@ antlrcpp::Any ParserDriver::visitStringOps(query_parserParser::StringOpsContext*
     return {};
 }
 
-antlrcpp::Any ParserDriver::visitOr(query_parserParser::OrContext* context)
+antlrcpp::Any QueryParser::visitOr(query_parserParser::OrContext* context)
 {
     auto ctxs = context->and_pred();
     if (ctxs.size() == 1) {
@@ -368,7 +442,7 @@ antlrcpp::Any ParserDriver::visitOr(query_parserParser::OrContext* context)
     return q;
 }
 
-antlrcpp::Any ParserDriver::visitAnd(query_parserParser::AndContext* context)
+antlrcpp::Any QueryParser::visitAnd(query_parserParser::AndContext* context)
 {
     auto ctxs = context->atom_pred();
     if (ctxs.size() == 1) {
@@ -381,7 +455,7 @@ antlrcpp::Any ParserDriver::visitAnd(query_parserParser::AndContext* context)
     return q;
 }
 
-antlrcpp::Any ParserDriver::visitValue(query_parserParser::ValueContext* context)
+antlrcpp::Any QueryParser::visitValue(query_parserParser::ValueContext* context)
 {
     if (auto ctx = context->prop()) {
         return visit(ctx);
@@ -389,7 +463,7 @@ antlrcpp::Any ParserDriver::visitValue(query_parserParser::ValueContext* context
     return visit(context->constant());
 }
 
-antlrcpp::Any ParserDriver::visitProperty(query_parserParser::PropertyContext* context)
+antlrcpp::Any QueryParser::visitProperty(query_parserParser::PropertyContext* context)
 {
     ExpressionComparisonType comp_type = ExpressionComparisonType::Any;
     if (context->aggr) {
@@ -409,7 +483,7 @@ antlrcpp::Any ParserDriver::visitProperty(query_parserParser::PropertyContext* c
     return std::unique_ptr<realm::Subexpr>(subexpr);
 }
 
-antlrcpp::Any ParserDriver::visitPostOp(query_parserParser::PostOpContext* context)
+antlrcpp::Any QueryParser::visitPostOp(query_parserParser::PostOpContext* context)
 {
     auto subexpr = std::unique_ptr<realm::Subexpr>(std::get<Subexpr*>(m_values.get(context->parent)));
     switch (context->type->getType()) {
@@ -430,7 +504,7 @@ antlrcpp::Any ParserDriver::visitPostOp(query_parserParser::PostOpContext* conte
     return subexpr;
 }
 
-antlrcpp::Any ParserDriver::visitPropAggr(query_parserParser::PropAggrContext* context)
+antlrcpp::Any QueryParser::visitPropAggr(query_parserParser::PropAggrContext* context)
 {
     std::unique_ptr<realm::Subexpr> sub_column;
     {
@@ -471,7 +545,7 @@ antlrcpp::Any ParserDriver::visitPropAggr(query_parserParser::PropAggrContext* c
     return {};
 }
 
-antlrcpp::Any ParserDriver::visitListAggr(query_parserParser::ListAggrContext* context)
+antlrcpp::Any QueryParser::visitListAggr(query_parserParser::ListAggrContext* context)
 {
     auto path = visit(context->path()).as<LinkChain>();
     auto subexpr = std::unique_ptr<Subexpr>(path.column(context->ID()->getText()));
@@ -496,12 +570,12 @@ antlrcpp::Any ParserDriver::visitListAggr(query_parserParser::ListAggrContext* c
     return {};
 }
 
-antlrcpp::Any ParserDriver::visitAggrOp(query_parserParser::AggrOpContext* context)
+antlrcpp::Any QueryParser::visitAggrOp(query_parserParser::AggrOpContext* context)
 {
     return context->type->getType();
 }
 
-antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* context)
+antlrcpp::Any QueryParser::visitConstant(query_parserParser::ConstantContext* context)
 {
     std::unique_ptr<Subexpr> ret;
     auto hint = std::get<DataType>(m_values.get(context));
@@ -618,7 +692,7 @@ antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* c
     return antlrcpp::Any(std::move(ret));
 }
 
-antlrcpp::Any ParserDriver::visitTrueOrFalse(query_parserParser::TrueOrFalseContext* context)
+antlrcpp::Any QueryParser::visitTrueOrFalse(query_parserParser::TrueOrFalseContext* context)
 {
     Query q = m_base_table->where();
     if (context->val->getType() == query_parserParser::TRUE_PRED) {
@@ -630,7 +704,7 @@ antlrcpp::Any ParserDriver::visitTrueOrFalse(query_parserParser::TrueOrFalseCont
     return q;
 }
 
-antlrcpp::Any ParserDriver::visitPath(query_parserParser::PathContext* context)
+antlrcpp::Any QueryParser::visitPath(query_parserParser::PathContext* context)
 {
     auto comp_type = std::get<ExpressionComparisonType>(m_values.get(context->parent));
     LinkChain link_chain(m_base_table, comp_type);
@@ -641,59 +715,6 @@ antlrcpp::Any ParserDriver::visitPath(query_parserParser::PathContext* context)
     return link_chain;
 }
 
-Subexpr* LinkChain::column(std::string col)
-{
-    auto col_key = m_current_table->get_column_key(col);
-    if (!col_key) {
-        std::string err = m_current_table->get_name();
-        err += " has no property: ";
-        err += col;
-        throw std::runtime_error(err);
-    }
-
-    if (m_current_table->is_list(col_key)) {
-        switch (col_key.get_type()) {
-            case col_type_Int:
-                return new Columns<Lst<Int>>(col_key, m_base_table, m_link_cols, m_comparison_type);
-            case col_type_String:
-                return new Columns<Lst<String>>(col_key, m_base_table, m_link_cols, m_comparison_type);
-            case col_type_Timestamp:
-                return new Columns<Lst<Timestamp>>(col_key, m_base_table, m_link_cols, m_comparison_type);
-            case col_type_LinkList:
-                add(col_key);
-                return new Columns<Link>(col_key, m_base_table, m_link_cols, m_comparison_type);
-            default:
-                break;
-        }
-    }
-    else {
-        switch (col_key.get_type()) {
-            case col_type_Int:
-                return new Columns<Int>(col_key, m_base_table, m_link_cols);
-            case col_type_Bool:
-                return new Columns<Bool>(col_key, m_base_table, m_link_cols);
-            case col_type_String:
-                return new Columns<String>(col_key, m_base_table, m_link_cols);
-            case col_type_Float:
-                return new Columns<Float>(col_key, m_base_table, m_link_cols);
-            case col_type_Double:
-                return new Columns<Double>(col_key, m_base_table, m_link_cols);
-            case col_type_Timestamp:
-                return new Columns<Timestamp>(col_key, m_base_table, m_link_cols);
-            case col_type_Decimal:
-                return new Columns<Decimal128>(col_key, m_base_table, m_link_cols);
-            case col_type_UUID:
-                return new Columns<UUID>(col_key, m_base_table, m_link_cols);
-            case col_type_Link:
-                return new Columns<ObjKey>(col_key, m_base_table, m_link_cols);
-            default:
-                break;
-        }
-    }
-    return nullptr;
-}
-
-namespace {
 
 class MixedArguments : public query_builder::Arguments {
 public:
@@ -755,6 +776,17 @@ private:
 };
 
 } // namespace
+namespace realm {
+
+namespace antlr4_parser {
+
+void parse_query(const std::string& str)
+{
+    QueryParser driver;
+    driver.parse_only(str);
+}
+
+} // namespace antlr4_parser
 
 Query Table::query(const std::string& query_string, const std::vector<Mixed>& arguments) const
 {
@@ -765,6 +797,59 @@ Query Table::query(const std::string& query_string, const std::vector<Mixed>& ar
 Query Table::query(const std::string& query_string, query_builder::Arguments& args,
                    const parser::KeyPathMapping&) const
 {
-    ParserDriver driver(m_own_ref, args);
-    return std::move(driver.parse(query_string));
+    QueryParser driver(m_own_ref, args);
+    return std::move(driver.build_query(query_string));
 }
+
+Subexpr* LinkChain::column(std::string col)
+{
+    auto col_key = m_current_table->get_column_key(col);
+    if (!col_key) {
+        std::string err = m_current_table->get_name();
+        err += " has no property: ";
+        err += col;
+        throw std::runtime_error(err);
+    }
+
+    if (m_current_table->is_list(col_key)) {
+        switch (col_key.get_type()) {
+            case col_type_Int:
+                return new Columns<Lst<Int>>(col_key, m_base_table, m_link_cols, m_comparison_type);
+            case col_type_String:
+                return new Columns<Lst<String>>(col_key, m_base_table, m_link_cols, m_comparison_type);
+            case col_type_Timestamp:
+                return new Columns<Lst<Timestamp>>(col_key, m_base_table, m_link_cols, m_comparison_type);
+            case col_type_LinkList:
+                add(col_key);
+                return new Columns<Link>(col_key, m_base_table, m_link_cols, m_comparison_type);
+            default:
+                break;
+        }
+    }
+    else {
+        switch (col_key.get_type()) {
+            case col_type_Int:
+                return new Columns<Int>(col_key, m_base_table, m_link_cols);
+            case col_type_Bool:
+                return new Columns<Bool>(col_key, m_base_table, m_link_cols);
+            case col_type_String:
+                return new Columns<String>(col_key, m_base_table, m_link_cols);
+            case col_type_Float:
+                return new Columns<Float>(col_key, m_base_table, m_link_cols);
+            case col_type_Double:
+                return new Columns<Double>(col_key, m_base_table, m_link_cols);
+            case col_type_Timestamp:
+                return new Columns<Timestamp>(col_key, m_base_table, m_link_cols);
+            case col_type_Decimal:
+                return new Columns<Decimal128>(col_key, m_base_table, m_link_cols);
+            case col_type_UUID:
+                return new Columns<UUID>(col_key, m_base_table, m_link_cols);
+            case col_type_Link:
+                return new Columns<ObjKey>(col_key, m_base_table, m_link_cols);
+            default:
+                break;
+        }
+    }
+    return nullptr;
+}
+} // namespace realm

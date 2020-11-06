@@ -54,6 +54,7 @@
 
 #include <realm.hpp>
 #include <realm/history.hpp>
+#include <realm/query/driver.hpp>
 #include <realm/parser/parser.hpp>
 #include <realm/parser/query_builder.hpp>
 #include <realm/query_expression.hpp>
@@ -146,7 +147,6 @@ static std::vector<std::string> valid_queries = {
     "a CONTAINS[c] b",
     "a contains [c] b",
     "'a'CONTAINS[c]b",
-    "0 BeGiNsWiTh 0",
     "0 ENDSWITH 0",
     "contains contains 'contains'",
     "beginswith beginswith 'beginswith'",
@@ -358,7 +358,7 @@ TEST(Parser_valid_queries)
 {
     for (auto& query : valid_queries) {
         // std::cout << "query: " << query << std::endl;
-        realm::parser::parse(query);
+        realm::antlr4_parser::parse_query(query);
     }
 }
 
