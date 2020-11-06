@@ -25,7 +25,7 @@ prop
     | path ID '.' aggrOp                                               # listAggr
     ;
 
-constant : val=(NUMBER|STRING|TIMESTAMP|TRUE|FALSE|NULL_VAL|ARG);
+constant : val=(NUMBER|STRING|TIMESTAMP|UUID|TRUE|FALSE|NULL_VAL|ARG);
 
 path: (ID '.')*;
 
@@ -82,6 +82,7 @@ STRING : SQ_STRING | DQ_STRING;
 DQ_STRING :  '"' CHARS* '"' ;
 SQ_STRING : '\'' CHARS* '\'';
 TIMESTAMP: ('T' NUMBER ':' NUMBER) | ( INT '-' INT '-' INT ('@'|'T') INT ':' INT ':' INT (':' INT)? );
+UUID: 'uuid(' HEX8 '-' HEX4 '-' HEX4 '-' HEX4 '-' HEX12 ')';
 
 fragment INT    : DIGIT+;
 fragment SIGN   : [+\-'];
@@ -89,7 +90,10 @@ fragment DIGIT  : [0-9] ;
 fragment EXP    : [eE] SIGN? INT;
 fragment CHARS  : ESC | ~["\\];
 fragment ESC :   '\\' (["\\/bfnrt] | UNICODE) ;
-fragment UNICODE : 'u' HEX HEX HEX HEX ;
+fragment UNICODE : 'u' HEX4;
+fragment HEX12 : HEX4 HEX4 HEX4;
+fragment HEX8 : HEX4 HEX4;
+fragment HEX4 : HEX HEX HEX HEX;
 fragment HEX : [0-9a-fA-F] ;
 
 WS     :  [ \t\r\n] -> skip;

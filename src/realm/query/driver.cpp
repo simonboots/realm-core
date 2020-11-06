@@ -205,6 +205,7 @@ antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualCo
             case type_ObjectId:
                 break;
             case type_UUID:
+                return simple_query(op, col_key, right->get_mixed().get<UUID>());
                 break;
             default:
                 break;
@@ -230,11 +231,21 @@ antlrcpp::Any ParserDriver::visitCompareEqual(query_parserParser::CompareEqualCo
     return {};
 }
 
+static std::map<int, std::string> opstr = {{query_parserParser::GREATER, ">"},
+                                           {query_parserParser::LESS, "<"},
+                                           {query_parserParser::GREATER_EQUAL, ">="},
+                                           {query_parserParser::LESS_EQUAL, "<="}};
+
 antlrcpp::Any ParserDriver::visitCompare(query_parserParser::CompareContext* context)
 {
     auto values = context->value();
     auto [left, right] = cmp(values);
     auto op = context->op->getType();
+
+    if (left->get_type() == type_UUID) {
+        throw std::logic_error(util::format(
+            "Unsupported operator %1 in query. Only equal (==) and not equal (!=) are supported for this type.", op));
+    }
 
     const TableProperty* prop = dynamic_cast<const TableProperty*>(left.get());
     if (prop && !prop->links_exist() && right->has_constant_evaluation() && left->get_type() == right->get_type()) {
@@ -560,6 +571,11 @@ antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* c
             ret = std::make_unique<Value<Timestamp>>(get_timestamp_if_valid(seconds, nanoseconds));
             break;
         }
+        case query_parserParser::UUID: {
+            auto s = context->UUID()->getText();
+            ret = std::make_unique<Value<UUID>>(UUID(s.substr(5, s.size() - 6)));
+            break;
+        }
         case query_parserParser::NULL_VAL: {
             ret = std::make_unique<Value<null>>(realm::null());
             break;
@@ -588,6 +604,9 @@ antlrcpp::Any ParserDriver::visitConstant(query_parserParser::ConstantContext* c
                         break;
                     case type_Decimal:
                         ret = std::make_unique<Value<Decimal128>>(m_args.decimal128_for_argument(arg_no));
+                        break;
+                    case type_UUID:
+                        ret = std::make_unique<Value<UUID>>(m_args.uuid_for_argument(arg_no));
                         break;
                     default:
                         break;
@@ -663,6 +682,8 @@ Subexpr* LinkChain::column(std::string col)
                 return new Columns<Timestamp>(col_key, m_base_table, m_link_cols);
             case col_type_Decimal:
                 return new Columns<Decimal128>(col_key, m_base_table, m_link_cols);
+            case col_type_UUID:
+                return new Columns<UUID>(col_key, m_base_table, m_link_cols);
             case col_type_Link:
                 return new Columns<ObjKey>(col_key, m_base_table, m_link_cols);
             default:
