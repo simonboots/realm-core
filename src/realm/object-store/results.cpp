@@ -326,6 +326,41 @@ T Results::get(size_t row_ndx)
     throw OutOfBoundsIndexException{row_ndx, do_size()};
 }
 
+template <>
+Mixed Results::get(size_t row_ndx)
+{
+    util::CheckedUniqueLock lock(m_mutex);
+    validate_read();
+    switch (m_mode) {
+
+        case Mode::Empty:
+            break;
+        case Mode::List:
+            if (row_ndx < m_list->size())
+                return m_list->get_any(row_ndx);
+            break;
+        case Mode::Table:
+            if (row_ndx < m_table->size())
+                return Mixed(m_table_iterator.get(*m_table, row_ndx));
+            break;
+        case Mode::LinkList:
+            if (update_linklist()) {
+                if (row_ndx < m_link_list->size())
+                    return m_link_list->get_any(row_ndx);
+                break;
+            }
+            REALM_FALLTHROUGH;
+        case Mode::Query:
+        case Mode::TableView:
+            do_evaluate_query_if_needed();
+            if (row_ndx >= m_table_view.size())
+                break;
+            if (m_update_policy == UpdatePolicy::Never && !m_table_view.is_obj_valid(row_ndx))
+                return Mixed{};
+            return Mixed(m_table_view.get(row_ndx));
+    }
+}
+
 template <typename T>
 util::Optional<T> Results::first()
 {

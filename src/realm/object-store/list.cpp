@@ -176,6 +176,13 @@ Obj List::get(size_t row_ndx) const
     return list.get_target_table()->get_object(list.get(row_ndx));
 }
 
+template <>
+Mixed List::get(size_t row_ndx) const
+{
+    verify_valid_row(row_ndx);
+    return m_list_base->get_any(row_ndx);
+}
+
 template <typename T>
 size_t List::find(T const& value) const
 {
@@ -221,6 +228,16 @@ void List::add(Obj o)
     as<Obj>().add(o.get_key());
 }
 
+template <>
+void List::add(Mixed o)
+{
+    verify_in_transaction();
+    if (m_is_embedded)
+        throw InvalidEmbeddedOperationException();
+
+    m_list_base->insert_any(size(), o);
+}
+
 template <typename T>
 void List::insert(size_t row_ndx, T value)
 {
@@ -238,6 +255,17 @@ void List::insert(size_t row_ndx, Obj o)
     if (m_is_embedded)
         throw InvalidEmbeddedOperationException();
     as<Obj>().insert(row_ndx, o.get_key());
+}
+
+template <>
+void List::insert(size_t row_ndx, Mixed o)
+{
+    verify_in_transaction();
+    verify_valid_row(row_ndx, true);
+    if (m_is_embedded)
+        throw InvalidEmbeddedOperationException();
+
+    m_list_base->insert_any(row_ndx, o);
 }
 
 void List::move(size_t source_ndx, size_t dest_ndx)
@@ -282,6 +310,17 @@ void List::set(size_t row_ndx, Obj o)
     if (m_is_embedded)
         throw InvalidEmbeddedOperationException();
     as<Obj>().set(row_ndx, o.get_key());
+}
+
+template <>
+void List::set(size_t row_ndx, Mixed o)
+{
+    verify_in_transaction();
+    verify_valid_row(row_ndx);
+    if (m_is_embedded)
+        throw InvalidEmbeddedOperationException();
+
+    m_list_base->set_any(row_ndx, o);
 }
 
 Obj List::add_embedded()
