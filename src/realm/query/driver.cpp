@@ -245,7 +245,7 @@ antlrcpp::Any QueryParser::visitCompareEqual(query_parserParser::CompareEqualCon
     auto [left, right] = cmp(values);
     auto op = context->op->getType();
     bool case_sensitive = true;
-    if (context->CASEINSENSITIVE()) {
+    if (context->CASE()) {
         case_sensitive = false;
     }
 
@@ -365,17 +365,15 @@ antlrcpp::Any QueryParser::visitCompare(query_parserParser::CompareContext* cont
 
 antlrcpp::Any QueryParser::visitStringOps(query_parserParser::StringOpsContext* context)
 {
-    std::unique_ptr<Subexpr> left(std::move(visit(context->value()).as<std::unique_ptr<Subexpr>>()));
-    StringData val;
-    std::string buffer;
-    if (auto node = context->STRING()) {
-        std::string s(node->getText());
-        buffer = s.substr(1, s.size() - 2);
-        val = buffer;
-    }
+    auto values = context->value();
+    auto [left, right] = cmp(values);
+
+    auto string_expr = dynamic_cast<ConstantStringValue*>(right.get());
+    std::string val = string_expr->get_mixed().get_string();
+
     auto op = context->op->getType();
     bool case_sensitive = true;
-    if (context->CASEINSENSITIVE()) {
+    if (context->CASE()) {
         case_sensitive = false;
     }
 
@@ -393,7 +391,7 @@ antlrcpp::Any QueryParser::visitStringOps(query_parserParser::StringOpsContext* 
                 return m_base_table->where().like(col_key, val, case_sensitive);
         }
     }
-    std::unique_ptr<Subexpr> right = std::make_unique<ConstantStringValue>(val);
+
     if (case_sensitive) {
         switch (op) {
             case query_parserParser::BEGINSWITH:

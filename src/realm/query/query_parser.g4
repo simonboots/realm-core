@@ -8,11 +8,10 @@ pred: and_pred (OR and_pred)*                                          # or;
 and_pred: atom_pred (AND atom_pred)*                                   # and;
 
 atom_pred
-    : value op=(EQUAL|NOT_EQUAL) CASEINSENSITIVE? value                # compareEqual
+    : value op=(EQUAL|NOT_EQUAL) CASE? value                           # compareEqual
     | value op=(GREATER|GREATER_EQUAL|LESS|LESS_EQUAL) value           # compare
-    | value op=(BEGINSWITH|ENDSWITH|CONTAINS|LIKE) CASEINSENSITIVE? 
-               (STRING | NULL_VAL)                                     # stringOps
-    | '!' atom_pred                                                    # not
+    | value op=(BEGINSWITH|ENDSWITH|CONTAINS|LIKE) CASE? value         # stringOps
+    | NOT_PRED atom_pred                                                    # not
     | '(' pred ')'                                                     # parens
     | val=(TRUE_PRED | FALSE_PRED)                                     # trueOrFalse
     ;
@@ -34,15 +33,10 @@ aggrOp : type=(MAX | MIN | SUM | AVG);
 
 // Lexer part
 
-NUMBER
-    :   SIGN? DIGIT+ '.' DIGIT* EXP?
-    |   SIGN? DIGIT* '.' DIGIT+ EXP?
-    |   SIGN? DIGIT+ EXP?
-    |   SIGN? ('inf' | 'infinity')
-    ;
+NUMBER: SIGN? (FLOAT_NUM | HEX_NUM | INT_NUM | INFINITY  | NAN);
 
-TRUE_PRED : 'TRUEPREDICATE';
-FALSE_PRED : 'FALSEPREDICATE';
+TRUE_PRED : 'TRUEPREDICATE' | 'truepredicate';
+FALSE_PRED : 'FALSEPREDICATE' | 'falsepredicate';
 NOT_PRED : '!' | 'not' | 'NOT';
 
 COUNT : '@count';
@@ -74,23 +68,32 @@ BEGINSWITH: 'BEGINSWITH' | 'beginswith';
 ENDSWITH: 'ENDSWITH' | 'endswith';
 CONTAINS: 'CONTAINS' | 'contains';
 LIKE: 'LIKE' | 'like';
-CASEINSENSITIVE : '[c]';
+CASE : '[c]';
 
 ARG    : '$' DIGIT+;
-ID     : [a-zA-Z] [a-zA-Z_\-0-9]+;
+ID     : [a-zA-Z_$] [a-zA-Z_\-$0-9]*;
 STRING : SQ_STRING | DQ_STRING;
-DQ_STRING :  '"' CHARS* '"' ;
-SQ_STRING : '\'' CHARS* '\'';
 TIMESTAMP: ('T' NUMBER ':' NUMBER) | ( INT '-' INT '-' INT ('@'|'T') INT ':' INT ':' INT (':' INT)? );
 UUID: 'uuid(' HEX8 '-' HEX4 '-' HEX4 '-' HEX4 '-' HEX12 ')';
 
+fragment DQ_STRING :  '"' CHARS* '"' ;
+fragment SQ_STRING : '\'' CHARS* '\'';
+fragment FLOAT_NUM 
+    :   DIGIT+ '.' DIGIT* EXP?
+    |   DIGIT* '.' DIGIT+ EXP?
+    ;
+fragment INT_NUM :  DIGIT+ EXP?;
+fragment HEX_NUM : '0' [xX] HEX+;
+fragment INFINITY: ('inf' | 'infinity');
+fragment NAN: 'NaN';
 fragment INT    : DIGIT+;
 fragment SIGN   : [+\-'];
 fragment DIGIT  : [0-9] ;
 fragment EXP    : [eE] SIGN? INT;
-fragment CHARS  : ESC | ~["\\];
-fragment ESC :   '\\' (["\\/bfnrt] | UNICODE) ;
-fragment UNICODE : 'u' HEX4;
+fragment CHARS  : ESC | ~["'\\];
+fragment ESC :   SIMPLE_ESC | UNICODE ;
+fragment SIMPLE_ESC : '\\' ['"/bfnrt0\\];
+fragment UNICODE : '\\u' HEX4;
 fragment HEX12 : HEX4 HEX4 HEX4;
 fragment HEX8 : HEX4 HEX4;
 fragment HEX4 : HEX HEX HEX HEX;
