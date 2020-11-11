@@ -106,6 +106,8 @@ int main(int argc, char const* argv[])
 
         auto tr = db->start_read();
         tr->to_json(std::cout, link_depth, &renames, output_mode);
+        auto t = tr->get_table("foo");
+        auto q = t->query("item > 5");
     }
 
     return 0;

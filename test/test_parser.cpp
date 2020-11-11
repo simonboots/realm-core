@@ -1234,24 +1234,17 @@ TEST(Parser_TwoColumnAggregates)
 void verify_query_sub(test_util::unit_test::TestContext& test_context, TableRef t, std::string query_string,
                       const util::Any* arg_list, size_t num_args, size_t num_results)
 {
-
     query_builder::AnyContext ctx;
     std::string empty_string;
     realm::query_builder::ArgumentConverter<util::Any, query_builder::AnyContext> args(ctx, arg_list, num_args);
 
-    Query q = t->where();
-
-    realm::parser::Predicate p = realm::parser::parse(query_string).predicate;
-    realm::query_builder::apply_predicate(q, p, args);
+    Query q = t->query(query_string, args, {});
 
     size_t q_count = q.count();
     CHECK_EQUAL(q_count, num_results);
     std::string description = q.get_description();
     // std::cerr << "original: " << query_string << "\tdescribed: " << description << "\n";
-    Query q2 = t->where();
-
-    realm::parser::Predicate p2 = realm::parser::parse(description).predicate;
-    realm::query_builder::apply_predicate(q2, p2, args);
+    Query q2 = t->query(description, args, {});
 
     size_t q2_count = q2.count();
     CHECK_EQUAL(q2_count, num_results);

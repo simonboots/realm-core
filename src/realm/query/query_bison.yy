@@ -10,14 +10,24 @@
 %code requires {
   # include <string>
   # include "realm/query_expression.hpp"
-  namespace realm {
-  class ParserDriver;
-  }
-  using namespace realm;
+  namespace realm::query_parser {
+    class ParserDriver;
+    class ConstantNode;
+    class PropertyNode;
+    class PostOpNode;
+    class AggrNode;
+    class ValueNode;
+    class TrueOrFalseNode;
+    class OrNode;
+    class AndNode;
+    class AtomPredNode;
+    class PathNode;
+  }  
+  using namespace realm::query_parser;
 }
 
 // The parsing context.
-%param { realm::ParserDriver& drv }
+%param { ParserDriver& drv }
 
 %locations
 
@@ -25,20 +35,40 @@
 %define parse.error verbose
 
 %code {
-#include "realm/query/driver.hpp"
+#include <realm/query/driver.hpp>
+#include <realm/table.hpp>
+using namespace realm;
+using namespace realm::query_parser;
 }
 
 %define api.token.prefix {TOK_}
 %token
   END  0  "end of file"
-  TRUEPREDICATE "true"
-  FALSEPREDICATE "false"
+  TRUEPREDICATE "truepredicate"
+  FALSEPREDICATE "falsepredicate"
+  TRUE    "true"
+  FALSE   "false"
+  NULL_VAL "null"
   ASSIGN  ":="
-  EQUALS  "=="
+  EQUAL   "=="
+  NOT_EQUAL   "!="
   LESS    "<"
   GREATER ">"
   GREATER_EQUAL ">="
   LESS_EQUAL    "<="
+  BEGINSWITH "beginswith"
+  ENDSWITH "endswith"
+  CONTAINS "contains"
+  LIKE    "like"
+  ANY     "any"
+  ALL     "all"
+  NONE    "none"
+  SIZE    "@size"
+  COUNT   "@count"
+  MAX     "@max"
+  MIN     "@min"
+  SUM     "@sun"
+  AVG     "@average"
   AND     "&&"
   OR      "||"
   MINUS   "-"
@@ -51,26 +81,34 @@
   DOT     "."
 ;
 
-%token <std::string> IDENTIFIER "identifier"
+%token <std::string> ID "identifier"
 %token <std::string> STRING "string"
-%token <int64_t> NUMBER "number"
-%token <double> FLOAT "float"
-%type  <std::unique_ptr<realm::Subexpr>> exp
-%type  <realm::Query> pred
-%type  <realm::LinkChain> path
+%token <std::string> NUMBER "number"
+%token <std::string> FLOAT "float"
+%token <std::string> TIMESTAMP "date"
+%token <std::string> UUID "UUID"
+%token <std::string> OID "ObjectId"
+%token <std::string> ARG "argument"
+%type  <int> equality relational stringops
+%type  <ConstantNode*> constant
+%type  <PropertyNode*> prop
+%type  <PostOpNode*> post_op
+%type  <AggrNode*> aggr_op
+%type  <ValueNode*> value
+%type  <TrueOrFalseNode*> boolexpr
+%type  <int> comp_type
+%type  <OrNode*> pred
+%type  <AtomPredNode*> atom_pred
+%type  <AndNode*> and_pred
+%type  <PathNode*> path
 %type  <std::string> path_elem
 
-%printer { util::serializer::SerialisationState state; yyo << $$->description(state); } <std::unique_ptr<realm::Subexpr>>;
-%printer { yyo << $$.get_description(); } <realm::Query>;
-%printer { yyo << "LinkChain"; } <realm::LinkChain>;
 %printer { yyo << $$; } <*>;
 %printer { yyo << "<>"; } <>;
 
 %%
-%start unit;
-unit: pred  {
-  drv.result = $1;
-};
+%start query;
+query: pred { drv.result = $1; };
 
 %left "||";
 %left "&&";
@@ -78,69 +116,86 @@ unit: pred  {
 %left "*" "/";
 %right "!";
 
-exp:
-  NUMBER            { $$.reset(new realm::Value<int64_t>($1)); }
-| STRING            { $$.reset(new ConstantStringValue($1)); }
-| FLOAT             { $$.reset(new realm::Value<double>($1)); }
-| path IDENTIFIER   { $$.reset($1.column($2)); }
-| "(" exp ")"       { $$ = std::move($2); }
+pred
+    : and_pred                  { $$ = drv.m_parse_nodes.create<OrNode>($1); }
+    | pred "||" and_pred        { $1->and_preds.emplace_back($3); $$ = $1; }
 
-pred:
-  exp "==" exp      {
-                        std::unique_ptr<realm::Subexpr> l;
-                        std::unique_ptr<realm::Subexpr> r;
-                        if ($1->has_constant_evaluation()) {
-                            l = std::move($1);
-                            r = std::move($3);
-                        }
-                        else {
-                            l = std::move($3);
-                            r = std::move($1);
-                        }
-                        $$ = Query(std::unique_ptr<Expression>(new Compare<Equal>(std::move(l), std::move(r))));
-                    }
-| exp "<" exp       { 
-                        $$ = Query(std::unique_ptr<Expression>(new Compare<Less>(std::move($1), std::move($3))));
-                    }
-| exp ">" exp       { 
-                        $$ = Query(std::unique_ptr<Expression>(new Compare<Greater>(std::move($1), std::move($3))));
-                    }
-| exp "<=" exp      { 
-                        $$ = Query(std::unique_ptr<Expression>(new Compare<LessEqual>(std::move($1), std::move($3))));
-                    }
-| exp ">=" exp      { 
-                        $$ = Query(std::unique_ptr<Expression>(new Compare<GreaterEqual>(std::move($1), std::move($3))));
-                    }
-| pred "&&" pred    {
-                        $$ = $1 && $3;
-                    }
-| pred "||" pred    {
-                        $$ = $1 || $3;
-                    }
-| "(" pred ")"      { $$ = std::move($2); }
-| "true"            {
-                        Query q = drv.base_table->where();
-                        q.and_query(std::unique_ptr<realm::Expression>(new TrueExpression));
-                        $$ = std::move(q);
-                    }
-| "false"           {
-                        Query q = drv.base_table->where();
-                        q.and_query(std::unique_ptr<realm::Expression>(new FalseExpression));
-                        $$ = std::move(q);
-                    }
-| "!" pred          {
-                        Query q = drv.base_table->where();
-                        q.Not();
-                        q.and_query($2);
-                        $$ = std::move(q);
-                    }
+and_pred
+    : atom_pred                 { $$ = drv.m_parse_nodes.create<AndNode>($1); }
+    | and_pred "&&" atom_pred   { $1->atom_preds.emplace_back($3); $$ = $1; }
 
-path:
-  %empty            { $$ = LinkChain(drv.base_table); }
-| path path_elem    { $1.link($2); $$ = $1; }  
+atom_pred
+    : value equality value      { $$ = drv.m_parse_nodes.create<EqualitylNode>($1, $2, $3); }
+    | value relational value    { $$ = drv.m_parse_nodes.create<RelationalNode>($1, $2, $3); }
+    | value stringops value     { $$ = drv.m_parse_nodes.create<StringOpsNode>($1, $2, $3); }
+    | NOT atom_pred             { $$ = drv.m_parse_nodes.create<NotNode>($2); }
+    | "(" pred ")"              { $$ = drv.m_parse_nodes.create<ParensNode>($2); }
+    | boolexpr                  { $$ = drv.m_parse_nodes.create<NotNode>($1); }
 
-path_elem:
-  IDENTIFIER "."    { $$ = $1; }
+value
+    : constant                  { $$ = drv.m_parse_nodes.create<ValueNode>($1);}
+    | prop                      { $$ = drv.m_parse_nodes.create<ValueNode>($1);}
+
+prop
+    : comp_type path ID         { $$ = drv.m_parse_nodes.create<PropNode>($2, $3, ExpressionComparisonType($1)); }
+    | path ID post_op           { $$ = drv.m_parse_nodes.create<PropNode>($1, $2, $3); }
+    | path ID "." aggr_op "."  ID   { $$ = drv.m_parse_nodes.create<LinkAggrNode>($1, $2, $4, $6); }
+    | path ID "." aggr_op       { $$ = drv.m_parse_nodes.create<ListAggrNode>($1, $2, $4); }
+
+constant
+    : NUMBER                    { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::NUMBER, $1); }
+    | STRING                    { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::STRING, $1); }
+    | FLOAT                     { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::FLOAT, $1); }
+    | TIMESTAMP                 { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::TIMESTAMP, $1); }
+    | UUID                      { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::UUID_T, $1); }
+    | OID                       { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::OID, $1); }
+    | TRUE                      { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::TRUE, ""); }
+    | FALSE                     { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::FALSE, ""); }
+    | NULL_VAL                  { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::NULL_VAL, ""); }
+    | ARG                       { $$ = drv.m_parse_nodes.create<ConstantNode>(ConstantNode::ARG, $1); }
+
+boolexpr
+    : "truepredicate"           { $$ = drv.m_parse_nodes.create<TrueOrFalseNode>(true); }
+    | "falsepredicate"          { $$ = drv.m_parse_nodes.create<TrueOrFalseNode>(false); }
+
+comp_type
+    : ANY                       { $$ = int(ExpressionComparisonType::Any); }
+    | ALL                       { $$ = int(ExpressionComparisonType::All); }
+    | NONE                      { $$ = int(ExpressionComparisonType::None); }
+
+post_op
+    : %empty                    { $$ = nullptr; }
+    | "." COUNT                 { $$ = drv.m_parse_nodes.create<PostOpNode>(PostOpNode::COUNT);}
+    | "." SIZE                  { $$ = drv.m_parse_nodes.create<PostOpNode>(PostOpNode::SIZE);}
+
+aggr_op
+    : MAX                       { $$ = drv.m_parse_nodes.create<AggrNode>(AggrNode::MAX);}
+    | MIN                       { $$ = drv.m_parse_nodes.create<AggrNode>(AggrNode::MIN);}
+    | SUM                       { $$ = drv.m_parse_nodes.create<AggrNode>(AggrNode::SUM);}
+    | AVG                       { $$ = drv.m_parse_nodes.create<AggrNode>(AggrNode::AVG);}
+
+equality
+    : EQUAL                     { $$ = CompareNode::EQUAL; }
+    | NOT_EQUAL                 { $$ = CompareNode::NOT_EQUAL; }
+
+relational
+    : LESS                      { $$ = CompareNode::LESS; }
+    | LESS_EQUAL                { $$ = CompareNode::LESS_EQUAL; }
+    | GREATER                   { $$ = CompareNode::GREATER; }
+    | GREATER_EQUAL             { $$ = CompareNode::GREATER_EQUAL; }
+
+stringops
+    : BEGINSWITH                { $$ = CompareNode::BEGINSWITH; }
+    | ENDSWITH                  { $$ = CompareNode::ENDSWITH; }
+    | CONTAINS                  { $$ = CompareNode::CONTAINS; }
+    | LIKE                      { $$ = CompareNode::LIKE; }
+
+path
+    : %empty                    { $$ = drv.m_parse_nodes.create<PathNode>(); }
+    | path path_elem            { $1->path_elems.push_back($2); $$ = $1; }
+
+path_elem
+    : ID "."                    { $$ = $1; }
 %%
 
 void

@@ -10,18 +10,17 @@
 
 %option noyywrap nounput noinput batch debug
 
-%{
-  // A number symbol corresponding to the value in S.
-  yy::parser::symbol_type make_STRING (const std::string &s, const yy::parser::location_type& loc);
-  yy::parser::symbol_type make_NUMBER (const std::string &s, const yy::parser::location_type& loc);
-  yy::parser::symbol_type make_FLOAT (const std::string &s, const yy::parser::location_type& loc);
-%}
-
-id      [a-zA-Z][a-zA-Z_0-9]*
+hex     [0-9a-fA-F]
+unicode '\\u' hex{4}
+simple  '\\' ['"/bfnrt0\\]
+id      [a-zA-Z][a-zA-Z_\-0-9]*
 string  ["][a-zA-Z0-9_\\/\.,: \[\]+$={}<>!();-]*["]
 digit   [0-9]
 int     {digit}+
-float   {digit}+[.]{digit}*
+sint    [+-]?{digit}+
+optint  {digit}*
+exp     [eE]{sint}
+chars   ~["'\\]
 blank   [ \t\r]
 
 %{
@@ -38,15 +37,14 @@ blank   [ \t\r]
 {blank}+   loc.step ();
 \n+        loc.lines (yyleng); loc.step ();
 
-"=="       return yy::parser::make_EQUALS (loc);
+"=="       return yy::parser::make_EQUAL  (loc);
+"!="       return yy::parser::make_NOT_EQUAL(loc);
 "<"        return yy::parser::make_LESS   (loc);
 ">"        return yy::parser::make_GREATER(loc);
 "<="       return yy::parser::make_LESS_EQUAL (loc);
 ">="       return yy::parser::make_GREATER_EQUAL (loc);
-"&&"       return yy::parser::make_AND    (loc);
-"and"      return yy::parser::make_AND    (loc);
-"||"       return yy::parser::make_OR     (loc);
-"or"       return yy::parser::make_OR     (loc);
+&&|(?i:and)       return yy::parser::make_AND    (loc);
+"||"|"or"        return yy::parser::make_OR     (loc);
 "-"        return yy::parser::make_MINUS  (loc);
 "+"        return yy::parser::make_PLUS   (loc);
 "*"        return yy::parser::make_STAR   (loc);
@@ -56,43 +54,42 @@ blank   [ \t\r]
 ":="       return yy::parser::make_ASSIGN (loc);
 "!"        return yy::parser::make_NOT    (loc);
 "."        return yy::parser::make_DOT    (loc);
-"TRUEPREDICATE" return yy::parser::make_TRUEPREDICATE (loc); 
-"FALSEPREDICATE" return yy::parser::make_FALSEPREDICATE (loc); 
-{int}      return make_NUMBER (yytext, loc);
-{float}    return make_FLOAT (yytext, loc);
-{string}   return make_STRING (yytext, loc);
-{id}       return yy::parser::make_IDENTIFIER (yytext, loc);
+"any"|"ANY"|"some"|"SOME" return yy::parser::make_ANY(loc);
+"all"|"ALL" return yy::parser::make_ALL(loc);
+"none"|"NONE" return yy::parser::make_NONE(loc);
+(?i:beginswith) return yy::parser::make_BEGINSWITH    (loc);
+(?i:endswith) return yy::parser::make_ENDSWITH    (loc);
+(?i:contains) return yy::parser::make_CONTAINS    (loc);
+(?i:like) return yy::parser::make_LIKE    (loc);
+(?i:truepredicate) return yy::parser::make_TRUEPREDICATE (loc); 
+(?i:falsepredicate) return yy::parser::make_FALSEPREDICATE (loc); 
+(?i:null)|(?i:nil) return yy::parser::make_NULL_VAL (loc);
+"@size" return yy::parser::make_SIZE    (loc);
+"@count" return yy::parser::make_COUNT    (loc);
+"@max" return yy::parser::make_MAX    (loc);
+"@min" return yy::parser::make_MIN    (loc);
+"@sum" return yy::parser::make_SUM    (loc);
+"@avg" return yy::parser::make_AVG    (loc);
+(true|TRUE) return yy::parser::make_TRUE    (loc);
+(false|FALSE) return yy::parser::make_FALSE    (loc);
+"uuid("{hex}{8}"-"{hex}{4}"-"{hex}{4}"-"{hex}{4}"-"{hex}{12}")" return yy::parser::make_UUID(yytext, loc); 
+"oid("{hex}{24}")" return yy::parser::make_OID(yytext, loc); 
+("T"{sint}":"{sint})|({int}"-"{int}"-"{int}[@T]{int}":"{int}":"{int}(":"{int})?) return yy::parser::make_TIMESTAMP(yytext, loc);
+"$"{int} return yy::parser::make_ARG(yytext, loc); 
+{int}{exp}?     return yy::parser::make_NUMBER (yytext, loc);
+({int}"."{optint})|({optint}"."{int}){exp}?    return yy::parser::make_FLOAT (yytext, loc);
+{string}   return yy::parser::make_STRING (yytext, loc);
+{id}       return yy::parser::make_ID (yytext, loc);
+
 .          {
              throw yy::parser::syntax_error
                (loc, "invalid character: " + std::string(yytext));
            }
+
 <<EOF>>    return yy::parser::make_END (loc);
 %%
 
-yy::parser::symbol_type
-make_NUMBER (const std::string &s, const yy::parser::location_type& loc)
-{
-  errno = 0;
-  long n = strtol(s.c_str(), nullptr, 10);
-  return yy::parser::make_NUMBER (int64_t(n), loc);
-}
-
-yy::parser::symbol_type
-make_FLOAT (const std::string &s, const yy::parser::location_type& loc)
-{
-  errno = 0;
-  double n = std::stod(s.c_str(), nullptr);
-  return yy::parser::make_FLOAT (n, loc);
-}
-
-yy::parser::symbol_type
-make_STRING (const std::string &s, const yy::parser::location_type& loc)
-{
-  std::string str = s.substr(1, s.size() - 2);
-  return yy::parser::symbol_type ( yy::parser::token::TOK_STRING, std::move(str), std::move(loc));
-}
-
-void realm::ParserDriver::scan_begin ()
+void realm::query_parser::ParserDriver::scan_begin (bool trace_scanning)
 {
     yy_flex_debug = trace_scanning;
     YY_BUFFER_STATE bp;
@@ -101,7 +98,7 @@ void realm::ParserDriver::scan_begin ()
     scan_buffer = (void *)bp;
 }
 
-void realm::ParserDriver::scan_end ()
+void realm::query_parser::ParserDriver::scan_end ()
 {
    yy_delete_buffer((YY_BUFFER_STATE)scan_buffer);
 }

@@ -2,30 +2,306 @@
 #define DRIVER_HH
 #include <string>
 #include <map>
+#include <any>
+#include <variant>
 #include "realm/query/query_bison.hpp"
 
 // Give Flex the prototype of yylex we want ...
-#define YY_DECL yy::parser::symbol_type yylex(realm::ParserDriver& drv)
+#define YY_DECL yy::parser::symbol_type yylex(realm::query_parser::ParserDriver& drv)
 // ... and declare it for the parser's sake.
 YY_DECL;
 
 namespace realm {
+
+namespace query_parser {
+
+class ParserNode {
+public:
+    virtual ~ParserNode();
+    virtual std::any visit(ParserDriver*) = 0;
+};
+
+class OrNode : public ParserNode {
+public:
+    std::vector<AndNode*> and_preds;
+
+    OrNode(AndNode* node)
+    {
+        and_preds.emplace_back(node);
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class AndNode : public ParserNode {
+public:
+    std::vector<AtomPredNode*> atom_preds;
+
+    AndNode(AtomPredNode* node)
+    {
+        atom_preds.emplace_back(node);
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class AtomPredNode : public ParserNode {
+public:
+    ~AtomPredNode() override;
+};
+
+class NotNode : public AtomPredNode {
+public:
+    AtomPredNode* atom_pred = nullptr;
+
+    NotNode(AtomPredNode* expr)
+        : atom_pred(expr)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class ParensNode : public AtomPredNode {
+public:
+    OrNode* pred = nullptr;
+
+    ParensNode(OrNode* expr)
+        : pred(expr)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class CompareNode : public AtomPredNode {
+public:
+    static constexpr int EQUAL = 0;
+    static constexpr int NOT_EQUAL = 1;
+    static constexpr int GREATER = 2;
+    static constexpr int LESS = 3;
+    static constexpr int GREATER_EQUAL = 4;
+    static constexpr int LESS_EQUAL = 5;
+    static constexpr int BEGINSWITH = 6;
+    static constexpr int ENDSWITH = 7;
+    static constexpr int CONTAINS = 8;
+    static constexpr int LIKE = 9;
+};
+
+class EqualitylNode : public CompareNode {
+public:
+    std::vector<ValueNode*> values;
+    int op;
+    bool case_sensitive = true;
+
+    EqualitylNode(ValueNode* left, int t, ValueNode* right)
+        : op(t)
+    {
+        values.emplace_back(left);
+        values.emplace_back(right);
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class RelationalNode : public CompareNode {
+public:
+    std::vector<ValueNode*> values;
+    int op;
+
+    RelationalNode(ValueNode* left, int t, ValueNode* right)
+        : op(t)
+    {
+        values.emplace_back(left);
+        values.emplace_back(right);
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class StringOpsNode : public CompareNode {
+public:
+    std::vector<ValueNode*> values;
+    int op;
+    bool case_sensitive = true;
+
+    StringOpsNode(ValueNode* left, int t, ValueNode* right)
+        : op(t)
+    {
+        values.emplace_back(left);
+        values.emplace_back(right);
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class ConstantNode : public ParserNode {
+public:
+    enum Type { NUMBER, FLOAT, STRING, TIMESTAMP, UUID_T, OID, NULL_VAL, TRUE, FALSE, ARG };
+
+    Type type;
+    std::string text;
+
+    ConstantNode(Type t, const std::string& str)
+        : type(t)
+        , text(str)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class PostOpNode : public ParserNode {
+public:
+    enum Type { COUNT, SIZE };
+
+    Type type;
+
+    PostOpNode(Type t)
+        : type(t)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class AggrNode : public ParserNode {
+public:
+    enum Type { MAX, MIN, SUM, AVG };
+
+    Type type;
+
+    AggrNode(Type t)
+        : type(t)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class PropertyNode : public ParserNode {
+};
+
+class ListAggrNode : public PropertyNode {
+public:
+    PathNode* path;
+    std::string identifier;
+    AggrNode* aggr_op;
+
+    ListAggrNode(PathNode* node, std::string id, AggrNode* aggr)
+        : path(node)
+        , identifier(id)
+        , aggr_op(aggr)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class LinkAggrNode : public PropertyNode {
+public:
+    PathNode* path;
+    std::string link;
+    AggrNode* aggr_op;
+    std::string prop;
+
+    LinkAggrNode(PathNode* node, std::string id1, AggrNode* aggr, std::string id2)
+        : path(node)
+        , link(id1)
+        , aggr_op(aggr)
+        , prop(id2)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class PropNode : public PropertyNode {
+public:
+    PathNode* path;
+    std::string identifier;
+    ExpressionComparisonType comp_type = ExpressionComparisonType::Any;
+    PostOpNode* post_op = nullptr;
+
+    PropNode(PathNode* node, std::string id, ExpressionComparisonType ct)
+        : path(node)
+        , identifier(id)
+        , comp_type(ct)
+    {
+    }
+    PropNode(PathNode* node, std::string id, PostOpNode* po_node)
+        : path(node)
+        , identifier(id)
+        , post_op(po_node)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class ValueNode : public ParserNode {
+public:
+    ConstantNode* constant = nullptr;
+    PropertyNode* prop = nullptr;
+
+    ValueNode(ConstantNode* node)
+        : constant(node)
+    {
+    }
+    ValueNode(PropertyNode* node)
+        : prop(node)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+class TrueOrFalseNode : public AtomPredNode {
+public:
+    bool true_or_false;
+
+    TrueOrFalseNode(bool type)
+        : true_or_false(type)
+    {
+    }
+    std::any visit(ParserDriver*) override;
+};
+
+
+class PathNode : public ParserNode {
+public:
+    std::any visit(ParserDriver*) override;
+
+    std::vector<std::string> path_elems;
+};
+
 // Conducting the whole scanning and parsing of Calc++.
 class ParserDriver {
 public:
-    ParserDriver(TableRef t)
-        : base_table(t)
+    using Values = std::variant<ExpressionComparisonType, Subexpr*, DataType>;
+    class ParserNodeStore {
+    public:
+        template <typename T, typename... Args>
+        T* create(Args&&... args)
+        {
+            auto ret = new T(args...);
+            m_store.push_back(ret);
+            return ret;
+        }
+
+        ~ParserNodeStore()
+        {
+            for (auto it : m_store) {
+                delete it;
+            }
+        }
+
+    private:
+        std::vector<ParserNode*> m_store;
+    };
+
+    ParserDriver(TableRef t, query_builder::Arguments& args)
+        : m_base_table(t)
+        , m_args(args)
     {
     }
 
-    Query result;
-    TableRef base_table;
+    ParserNode* result = nullptr;
+    TableRef m_base_table;
+    query_builder::Arguments& m_args;
+    ParserNodeStore m_parse_nodes;
 
     // Run the parser on file F.  Return 0 on success.
     int parse(const std::string& str);
 
     // Handling the scanner.
-    void scan_begin();
+    void scan_begin(bool trace_scanning);
     void scan_end();
 
     void error(const std::string& err)
@@ -34,10 +310,22 @@ public:
         parse_error = true;
     }
 
-    // Whether to generate parser debug traces.
-    bool trace_parsing = false;
-    // Whether to generate scanner debug traces.
-    bool trace_scanning = false;
+    void push(const Values& val)
+    {
+        m_values.emplace_back(val);
+    }
+    Values pop()
+    {
+        REALM_ASSERT(!m_values.empty());
+        auto ret = m_values.back();
+        m_values.pop_back();
+        return ret;
+    }
+
+    template <class T>
+    Query simple_query(int op, ColKey col_key, T val);
+    std::pair<std::unique_ptr<Subexpr>, std::unique_ptr<Subexpr>> cmp(const std::vector<ValueNode*>& values);
+
     // The token's location used by the scanner.
     yy::location location;
 private:
@@ -46,6 +334,29 @@ private:
     std::string error_string;
     void* scan_buffer = nullptr;
     bool parse_error = false;
+    std::vector<Values> m_values;
 };
+
+template <class T>
+Query ParserDriver::simple_query(int op, ColKey col_key, T val)
+{
+    switch (op) {
+        case CompareNode::EQUAL:
+            return m_base_table->where().equal(col_key, val);
+        case CompareNode::NOT_EQUAL:
+            return m_base_table->where().not_equal(col_key, val);
+        case CompareNode::GREATER:
+            return m_base_table->where().greater(col_key, val);
+        case CompareNode::LESS:
+            return m_base_table->where().less(col_key, val);
+        case CompareNode::GREATER_EQUAL:
+            return m_base_table->where().greater_equal(col_key, val);
+        case CompareNode::LESS_EQUAL:
+            return m_base_table->where().less_equal(col_key, val);
+    }
+    return m_base_table->where();
 }
+
+} // namespace query_parser
+} // namespace realm
 #endif // ! DRIVER_HH
