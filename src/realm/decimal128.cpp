@@ -542,7 +542,7 @@ std::string Decimal128::to_string() const
             ret += "NaN";
         }
         else {
-            ret += "Inf";
+            ret += "inf";
         }
         return ret;
     }

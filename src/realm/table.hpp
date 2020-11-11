@@ -60,6 +60,7 @@ class SubQuery;
 class ColKeys;
 struct GlobalKey;
 class LinkChain;
+class Subexpr;
 
 struct Link {
 };
@@ -903,8 +904,8 @@ enum class ExpressionComparisonType : unsigned char {
 // It has member functions corresponding to the ones defined on Table.
 class LinkChain {
 public:
-    LinkChain(ConstTableRef t, ExpressionComparisonType type = ExpressionComparisonType::Any)
-        : m_current_table(t.unchecked_ptr())
+    LinkChain(ConstTableRef t = {}, ExpressionComparisonType type = ExpressionComparisonType::Any)
+        : m_current_table(t ? t.unchecked_ptr() : nullptr)
         , m_base_table(t)
         , m_comparison_type(type)
     {
@@ -914,9 +915,27 @@ public:
         return m_base_table.unchecked_ptr();
     }
 
+    const Table* get_current_table() const
+    {
+        return m_current_table;
+    }
+
     LinkChain& link(ColKey link_column)
     {
         add(link_column);
+        return *this;
+    }
+
+    LinkChain& link(std::string col_name)
+    {
+        auto ck = m_current_table->get_column_key(col_name);
+        if (!ck) {
+            std::string err = m_current_table->get_name();
+            err += " has no property: ";
+            err += col_name;
+            throw std::runtime_error(err);
+        }
+        add(ck);
         return *this;
     }
 
@@ -926,6 +945,7 @@ public:
         return link(backlink_col_key);
     }
 
+    Subexpr* column(std::string col_name);
 
     template <class T>
     inline Columns<T> column(ColKey col_key)
@@ -1000,7 +1020,11 @@ private:
         }
         else {
             // Only last column in link chain is allowed to be non-link
-            throw(LogicError::type_mismatch);
+            std::string err = m_current_table->get_name();
+            err += ".";
+            err += m_current_table->get_column_name(ck);
+            err += " is not a link column";
+            throw std::runtime_error(err);
         }
         m_link_cols.push_back(ck);
     }
