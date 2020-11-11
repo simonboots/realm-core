@@ -106,6 +106,9 @@ int main(int argc, char const* argv[])
 
         auto tr = db->start_read();
         tr->to_json(std::cout, link_depth, &renames, output_mode);
+        auto t = tr->get_table("foo");
+        auto q2 = t->query("(age < 30 || age == 40) and pet.name == \"Lady\"");
+        std::cout << q2.get_description() << std::endl;
     }
 
     return 0;
