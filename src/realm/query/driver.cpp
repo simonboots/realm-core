@@ -817,6 +817,8 @@ Subexpr* LinkChain::column(std::string col)
                 return new Columns<Lst<String>>(col_key, m_base_table, m_link_cols, m_comparison_type);
             case col_type_Timestamp:
                 return new Columns<Lst<Timestamp>>(col_key, m_base_table, m_link_cols, m_comparison_type);
+            case col_type_Mixed:
+                return new Columns<Lst<Mixed>>(col_key, m_base_table, m_link_cols, m_comparison_type);
             case col_type_LinkList:
                 add(col_key);
                 return new Columns<Link>(col_key, m_base_table, m_link_cols, m_comparison_type);
@@ -842,6 +844,8 @@ Subexpr* LinkChain::column(std::string col)
                 return new Columns<Decimal128>(col_key, m_base_table, m_link_cols);
             case col_type_UUID:
                 return new Columns<UUID>(col_key, m_base_table, m_link_cols);
+            case col_type_Mixed:
+                return new Columns<Mixed>(col_key, m_base_table, m_link_cols);
             case col_type_Link:
                 return new Columns<ObjKey>(col_key, m_base_table, m_link_cols);
             default:
