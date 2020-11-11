@@ -197,6 +197,9 @@ endif()
 # Find dependencies
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
+find_package(antlr4-generator REQUIRED)
+find_package(antlr4-runtime REQUIRED)
+set(ANTLR4_JAR_LOCATION /usr/local/lib/antlr-4.7.1-complete.jar)
 
 set(REALM_NEEDS_OPENSSL ${REALM_FORCE_OPENSSL})
 if(UNIX AND NOT APPLE)

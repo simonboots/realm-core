@@ -1,3 +1,12 @@
+# generate lexer
+ antlr4_generate( 
+   QueryParser
+   ${CMAKE_CURRENT_SOURCE_DIR}/query/query_parser.g4
+   BOTH
+   false
+   true
+   )
+
 set(REALM_SOURCES
     # slowest to compile first
     query.cpp
@@ -59,6 +68,8 @@ set(REALM_SOURCES
     utilities.cpp
     uuid.cpp
     version.cpp
+    query/driver.cpp
+    ${ANTLR4_SRC_FILES_QueryParser}
 ) # REALM_SOURCES
 
 set(UTIL_SOURCES
@@ -278,6 +289,8 @@ set_target_properties(Storage PROPERTIES
     OUTPUT_NAME "realm"
 )
 
+set_source_files_properties(query/driver.cpp ${ANTLR4_SRC_FILES_QueryParser} PROPERTIES COMPILE_OPTIONS "-Wno-attributes;-Wno-unused-parameter;-Wno-unused-but-set-variable")
+
 target_compile_options(Storage PUBLIC ${REALM_SANITIZER_FLAGS})
 
 target_compile_definitions(Storage PUBLIC
@@ -296,6 +309,8 @@ target_include_directories(Storage INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
+target_include_directories(Storage PRIVATE ${ANTLR4_INCLUDE_DIR} ${ANTLR4_INCLUDE_DIR_QueryParser})
+
 if(CMAKE_SYSTEM_NAME MATCHES "^Windows")
     target_sources(Storage PRIVATE $<TARGET_OBJECTS:sha_win32>)
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -308,6 +323,7 @@ elseif(APPLE)
 endif()
 
 target_link_libraries(Storage INTERFACE Threads::Threads)
+target_link_libraries(Storage PUBLIC antlr4_static)
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(Storage PUBLIC OpenSSL::Crypto)
