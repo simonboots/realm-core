@@ -93,6 +93,30 @@ std::pair<size_t, bool> Set::remove(const T& value)
     return as<T>().erase(value);
 }
 
+size_t Set::find_any(Mixed value) const
+{
+    verify_attached();
+    return m_set_base->find_any(value);
+}
+
+Mixed Set::get_any(size_t row_ndx) const
+{
+    verify_valid_row(row_ndx);
+    return m_set_base->get_any(row_ndx);
+}
+
+std::pair<size_t, bool> Set::insert_any(Mixed value)
+{
+    verify_in_transaction();
+    return m_set_base->insert_any(value);
+}
+
+std::pair<size_t, bool> Set::remove_any(Mixed value)
+{
+    verify_in_transaction();
+    return m_set_base->erase_any(value);
+}
+
 util::Optional<Mixed> Set::max(ColKey col) const
 {
     if (get_type() == PropertyType::Object)

@@ -64,6 +64,10 @@ public:
     template <class T, class Context>
     std::pair<size_t, bool> remove(Context&, const T&);
 
+    size_t find_any(Mixed value) const;
+    std::pair<size_t, bool> insert_any(Mixed value);
+    std::pair<size_t, bool> remove_any(Mixed value);
+
     void remove_all();
 
     // Replace the values in this set with the values from an enumerable object
@@ -74,6 +78,7 @@ public:
     auto get(Context&, size_t row_ndx) const;
     template <typename T = Obj>
     T get(size_t row_ndx) const;
+    Mixed get_any(size_t row_ndx) const;
 
     Results sort(SortDescriptor order) const;
     Results sort(const std::vector<std::pair<std::string, bool>>& keypaths) const;
