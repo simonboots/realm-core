@@ -54,6 +54,8 @@ struct ListChangeInfo {
 using TableKeyType = decltype(TableKey::value);
 using ObjKeyType = decltype(ObjKey::value);
 
+using KeyPathArray = std::vector<std::pair<TableKey, ColKey>>;
+
 struct TransactionChangeInfo {
     std::vector<ListChangeInfo> lists;
     std::unordered_map<TableKeyType, ObjectChangeSet> tables;
@@ -79,7 +81,8 @@ public:
 
     // Recursively add `table` and all tables it links to to `out`, along with
     // information about the links from them
-    static void find_related_tables(std::vector<RelatedTable>& out, Table const& table);
+    static void find_related_tables(std::vector<RelatedTable>& out, Table const& table,
+                                    std::vector<KeyPathArray> key_path_array = {});
 
 private:
     TransactionChangeInfo const& m_info;
@@ -87,7 +90,7 @@ private:
     const TableKey m_root_table_key;
     ObjectChangeSet const* const m_root_object_changes;
     std::unordered_map<TableKeyType, std::unordered_set<ObjKeyType>> m_not_modified;
-    std::vector<RelatedTable> const& m_related_tables;
+    std::vector<RelatedTable> const& deep_change_checker_related_tables;
 
     struct Path {
         int64_t obj_key;
@@ -120,7 +123,8 @@ public:
     // Add a callback to be called each time the collection changes
     // This can only be called from the target collection's thread
     // Returns a token which can be passed to remove_callback()
-    uint64_t add_callback(CollectionChangeCallback callback) REQUIRES(!m_callback_mutex);
+    uint64_t add_callback(CollectionChangeCallback callback, KeyPathArray key_path_array = {})
+        REQUIRES(!m_callback_mutex);
     // Remove a previously added token. The token is no longer valid after
     // calling this function and must not be used again. This function can be
     // called from any thread.
@@ -243,6 +247,8 @@ private:
         // not guarded by a lock and can only be accessed on the notifier's
         // target thread.
         CollectionChangeBuilder changes_to_deliver;
+        // 
+        KeyPathArray key_path_array;
         // A unique-per-notifier identifier used to unregister the callback.
         uint64_t token;
         // We normally want to skip calling the callback if there's no changes,

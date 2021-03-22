@@ -61,13 +61,32 @@ CollectionNotifier::get_modification_checker(TransactionChangeInfo const& info, 
     return DeepChangeChecker(info, *root_table, m_related_tables);
 }
 
-void DeepChangeChecker::find_related_tables(std::vector<RelatedTable>& out, Table const& table)
+void DeepChangeChecker::find_related_tables(std::vector<RelatedTable>& out, Table const& table,
+                                            std::vector<KeyPathArray> key_path_arrays)
 {
     auto table_key = table.get_key();
     if (any_of(begin(out), end(out), [=](auto& tbl) {
             return tbl.table_key == table_key;
         }))
         return;
+
+    // Likewise, if the `table` is not part of the filter `key_path_array` it can be skipped as well.
+    bool is_table_contained_in_related_tables = false;
+    if (key_path_arrays.size() == 0) { //} || (key_path_arrays.size() == 1 && key_path_arrays[0].size() == 0)) {
+        is_table_contained_in_related_tables = true;
+    }
+    else {
+        for (KeyPathArray key_path_array : key_path_arrays) {
+            for (std::pair<TableKey, ColKey> key_path_element : key_path_array) {
+                if (key_path_element.first == table_key) {
+                    is_table_contained_in_related_tables = true;
+                }
+            }
+        }
+    }
+    if (!is_table_contained_in_related_tables) {
+        return;
+    }
 
     // We need to add this table to `out` before recurring so that the check
     // above works, but we can't store a pointer to the thing being populated
@@ -94,16 +113,17 @@ DeepChangeChecker::DeepChangeChecker(TransactionChangeInfo const& info, Table co
         auto it = info.tables.find(m_root_table_key.value);
         return it != info.tables.end() ? &it->second : nullptr;
     }())
-    , m_related_tables(related_tables)
+    , deep_change_checker_related_tables(related_tables)
 {
 }
 
 bool DeepChangeChecker::check_outgoing_links(TableKey table_key, Table const& table, int64_t obj_key, size_t depth)
 {
-    auto it = find_if(begin(m_related_tables), end(m_related_tables), [&](auto&& tbl) {
-        return tbl.table_key == table_key;
-    });
-    if (it == m_related_tables.end())
+    auto it =
+        find_if(begin(deep_change_checker_related_tables), end(deep_change_checker_related_tables), [&](auto&& tbl) {
+            return tbl.table_key == table_key;
+        });
+    if (it == deep_change_checker_related_tables.end())
         return false;
     if (it->links.empty())
         return false;
@@ -198,13 +218,13 @@ void CollectionNotifier::release_data() noexcept
     m_sg = nullptr;
 }
 
-uint64_t CollectionNotifier::add_callback(CollectionChangeCallback callback)
+uint64_t CollectionNotifier::add_callback(CollectionChangeCallback callback, KeyPathArray key_path_array)
 {
     m_realm->verify_thread();
 
     util::CheckedLockGuard lock(m_callback_mutex);
     auto token = m_next_token++;
-    m_callbacks.push_back({std::move(callback), {}, {}, token, false, false});
+    m_callbacks.push_back({std::move(callback), {}, {}, key_path_array, token, false, false});
     if (m_callback_index == npos) { // Don't need to wake up if we're already sending notifications
         Realm::Internal::get_coordinator(*m_realm).wake_up_notifier_worker();
         m_have_callbacks = true;
@@ -291,7 +311,11 @@ std::unique_lock<std::mutex> CollectionNotifier::lock_target()
 void CollectionNotifier::set_table(ConstTableRef table)
 {
     m_related_tables.clear();
-    DeepChangeChecker::find_related_tables(m_related_tables, *table);
+    std::vector<KeyPathArray> key_path_arrays = {};
+    for (auto& callback : m_callbacks) {
+        key_path_arrays.push_back(callback.key_path_array);
+    }
+    DeepChangeChecker::find_related_tables(m_related_tables, *table, key_path_arrays);
 }
 
 void CollectionNotifier::add_required_change_info(TransactionChangeInfo& info)
