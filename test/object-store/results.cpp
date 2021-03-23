@@ -1677,6 +1677,9 @@ TEST_CASE("notifications: results") {
     auto r2_table = r2->read_group().get_table("class_object");
 
     Results results(r, table->where().greater(col_value, 0).less(col_value, 10));
+    REQUIRE(results.size() == 4); // Expecting: 2, 4, 6, 8
+    Results results2(r, table);
+    REQUIRE(results2.size() == 10);
 
     auto write = [&](auto&& f) {
         r->begin_transaction();
@@ -1687,14 +1690,52 @@ TEST_CASE("notifications: results") {
 
     SECTION("unsorted notifications") {
         int notification_calls = 0;
+        int notification_calls2 = 0;
         CollectionChangeSet change;
-        auto token = results.add_notification_callback([&](CollectionChangeSet c, std::exception_ptr err) {
-            REQUIRE_FALSE(err);
-            change = c;
-            ++notification_calls;
-        });
+        CollectionChangeSet change2;
+        std::pair<TableKey, ColKey> key_path_element(table, col_value);
+        std::pair<TableKey, ColKey> key_path_element2(table, col_link);
+        // auto key_path = {key_path_element};
+        // auto key_path2 = {key_path_element2};
+        KeyPathArray key_path_array = {key_path_element};
+        KeyPathArray key_path_array2 = {key_path_element2};
+        auto token = results.add_notification_callback(
+            [&](CollectionChangeSet c, std::exception_ptr err) {
+                REQUIRE_FALSE(err);
+                change = c;
+                ++notification_calls;
+            },
+            key_path_array);
+        auto token2 = results.add_notification_callback(
+            [&](CollectionChangeSet c, std::exception_ptr err) {
+                REQUIRE_FALSE(err);
+                change2 = c;
+                ++notification_calls2;
+            },
+            key_path_array2);
 
         advance_and_notify(*r);
+        REQUIRE(notification_calls2 == 1);
+
+        SECTION(" ------ ") {
+            write([&] {
+                // Change the value of an object already part of the Result.
+                table->get_object(object_keys[1]).set(col_value, 3);
+            });
+            // advance_and_notify(*r);
+            REQUIRE(notification_calls == 2);
+            REQUIRE_FALSE(change.empty());
+            REQUIRE_INDICES(change.insertions);
+            REQUIRE_INDICES(change.modifications, 0);
+            REQUIRE_INDICES(change.modifications_new, 0);
+            REQUIRE_INDICES(change.deletions);
+            REQUIRE(notification_calls2 == 1);
+            // REQUIRE(change2 == nullptr);
+            // REQUIRE_INDICES(change2.insertions);
+            // REQUIRE_INDICES(change2.modifications);
+            // REQUIRE_INDICES(change2.modifications_new);
+            // REQUIRE_INDICES(change2.deletions);
+        }
 
         SECTION("modifications to unrelated tables do not send notifications") {
             write([&] {
