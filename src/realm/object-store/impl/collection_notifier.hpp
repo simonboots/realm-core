@@ -79,8 +79,33 @@ public:
 
     bool operator()(int64_t obj_key);
 
-    // Recursively add `table` and all tables it links to to `out`, along with
-    // information about the links from them
+    /**
+     * Search for related tables within the specified `table`.
+     * Related tables are all tables that can be reached via links from the `table`, including itself.
+     * Example schema:
+     * {
+     *   {"root_table",
+     *       {
+     *           {"link", PropertyType::Object | PropertyType::Nullable, "linked_table"},
+     *       }
+     *   },
+     *   {"linked_table",
+     *       {
+     *           {"value", PropertyType::Int}
+     *       }
+     *   },
+     * }
+     * This would result in a `std::vector<RelatedTable>` with two entries, one for `root_table` and one for
+     * `linked_table`. The function would be called once for each table involved until there are no further links.
+     *
+     * Using a `key_path_array` that only consists of the table key for `"root_table"` would result
+     * in `out` just having this one entry.
+     *
+     * @param out Return value containing all tables that can be reached from the given `table` including
+     *            some additional information about those tables (see `OutgoingLink` in `RelatedTable`).
+     * @param table The table that the related tables will be searched for.
+     * @param key_path_array An optional filter the related tables are restricted to.
+     */
     static void find_related_tables(std::vector<RelatedTable>& out, Table const& table,
                                     std::vector<KeyPathArray> key_path_array = {});
 

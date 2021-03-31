@@ -51,6 +51,9 @@ CollectionNotifier::get_modification_checker(TransactionChangeInfo const& info, 
         };
     }
 
+    // If the table in question has no outgoing links it will be the only entry in `m_related_tables`.
+    // In this case we do not need a `DeepChangeChecker` and check the modifications against the
+    // `ObjectChangeSet` within the `TransactionChangeInfo` for this table.
     if (m_related_tables.size() == 1) {
         auto& object_set = info.tables.find(m_related_tables[0].table_key.value)->second;
         return [&](ObjectChangeSet::ObjectKeyType object_key) {
@@ -65,6 +68,8 @@ void DeepChangeChecker::find_related_tables(std::vector<RelatedTable>& out, Tabl
                                             std::vector<KeyPathArray> key_path_arrays)
 {
     auto table_key = table.get_key();
+    // If the currently looked at `table` is already part of the `std::vector<RelatedTable>` (possibly due to another
+    // path involving it) we do not need to traverse further and can return.
     if (any_of(begin(out), end(out), [=](auto& tbl) {
             return tbl.table_key == table_key;
         }))
@@ -91,14 +96,16 @@ void DeepChangeChecker::find_related_tables(std::vector<RelatedTable>& out, Tabl
     // We need to add this table to `out` before recurring so that the check
     // above works, but we can't store a pointer to the thing being populated
     // because the recursive calls may resize `out`, so instead look it up by
-    // index every time
+    // index every time.
     size_t out_index = out.size();
     out.push_back({table_key, {}});
 
     for (auto col_key : table.get_column_keys()) {
         auto type = table.get_column_type(col_key);
+        // If a column within the `table` does link to another table it needs to be added to `table`'s links.
         if (type == type_Link || type == type_LinkList) {
             out[out_index].links.push_back({col_key.value, type == type_LinkList});
+            // Finally this function needs to be called again to traverse all linked tables using the just found link.
             find_related_tables(out, *table.get_link_target(col_key));
         }
     }
@@ -324,6 +331,7 @@ void CollectionNotifier::add_required_change_info(TransactionChangeInfo& info)
         return;
     }
 
+    // Create an entry in the `TransactionChangeInfo` for every table in `m_related_tables`.
     info.tables.reserve(m_related_tables.size());
     for (auto& tbl : m_related_tables)
         info.tables[tbl.table_key.value];
