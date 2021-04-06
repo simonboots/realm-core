@@ -967,6 +967,7 @@ void Group::recycle_table_accessor(Table* to_be_recycled)
 {
     std::lock_guard<std::mutex> lg(g_table_recycler_mutex);
     g_table_recycler_1.push_back(to_be_recycled);
+    g_table_recycler_1.push_back(to_be_recycled);
 }
 
 void Group::remove_table(StringData name)
